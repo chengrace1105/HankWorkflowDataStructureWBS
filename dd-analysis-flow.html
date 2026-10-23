@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DD 分析流程</title>
+<style>
+:root{
+  --bg:#f7f6f2; --card:#ffffff; --ink:#1f2328; --muted:#5d6670; --line:#d9d6cc;
+  --boss:#b4542a; --boss-bg:#fbeee6;
+  --front:#2f6f9f; --front-bg:#e7f0f7;
+  --drive:#2d7d4f; --drive-bg:#e6f3eb;
+  --claude:#6b4fa0; --claude-bg:#efeaf7;
+  --accent:#1f2328;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16181b; --card:#1f2226; --ink:#e8e6e1; --muted:#9aa3ad; --line:#33373d;
+    --boss:#e8936b; --boss-bg:#3a271e;
+    --front:#7fb3dc; --front-bg:#1c2b38;
+    --drive:#7cc79a; --drive-bg:#1b3125;
+    --claude:#b9a2e6; --claude-bg:#2a2338;
+    --accent:#e8e6e1;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16181b; --card:#1f2226; --ink:#e8e6e1; --muted:#9aa3ad; --line:#33373d;
+  --boss:#e8936b; --boss-bg:#3a271e;
+  --front:#7fb3dc; --front-bg:#1c2b38;
+  --drive:#7cc79a; --drive-bg:#1b3125;
+  --claude:#b9a2e6; --claude-bg:#2a2338;
+  --accent:#e8e6e1;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  line-height:1.6;font-size:15px}
+.wrap{max-width:1200px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:28px;margin:0 0 6px;letter-spacing:.02em}
+.sub{color:var(--muted);margin:0 0 28px}
+h2{font-size:20px;margin:44px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
+h2 .tag{display:inline-block;font-size:13px;font-weight:700;padding:2px 10px;border-radius:999px;
+  background:var(--accent);color:var(--bg);margin-right:8px;vertical-align:2px}
+h3{font-size:16px;margin:24px 0 10px}
+p.lead{color:var(--muted);margin:0 0 18px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:0 0 8px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+.boss{--c:var(--boss);--cb:var(--boss-bg)}
+.front{--c:var(--front);--cb:var(--front-bg)}
+.drive{--c:var(--drive);--cb:var(--drive-bg)}
+.claude{--c:var(--claude);--cb:var(--claude-bg)}
+.dot.boss,.dot.front,.dot.drive,.dot.claude{background:var(--c)}
+
+/* overview */
+.overview{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0 0}
+.ov{background:var(--cb);border:1px solid var(--line);border-top:4px solid var(--c);border-radius:10px;padding:12px}
+.ov b{display:block;color:var(--c);font-size:14px}
+.ov small{color:var(--muted);font-size:13px}
+
+/* flow */
+.flow{display:flex;flex-direction:column;gap:0;margin-top:14px}
+.step{display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:stretch}
+.who{font-size:13px;font-weight:700;color:var(--c);display:flex;align-items:center;justify-content:flex-end;text-align:right}
+.box{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--c);border-radius:10px;padding:12px 14px}
+.box .t{font-weight:700}
+.box .d{color:var(--muted);font-size:14px;margin-top:2px}
+.num{display:inline-block;width:22px;height:22px;border-radius:50%;background:var(--c);color:var(--card);
+  font-size:12px;font-weight:700;text-align:center;line-height:22px;margin-right:6px}
+.arrow{display:grid;grid-template-columns:120px 1fr;gap:14px}
+.arrow div:last-child{height:22px;position:relative}
+.arrow div:last-child::before{content:"";position:absolute;left:22px;top:0;bottom:6px;border-left:2px solid var(--line)}
+.arrow div:last-child::after{content:"";position:absolute;left:17px;bottom:0;border:6px solid transparent;border-top:7px solid var(--muted);border-bottom:0}
+.arrow.note div:last-child{height:auto;padding:4px 0 10px 44px;color:var(--muted);font-size:13px}
+.arrow.note div:last-child::before{bottom:8px}
+.arrow.note div:last-child::after{bottom:2px}
+.decision{border-style:dashed}
+.loop{margin-top:10px;font-size:13px;color:var(--muted);padding-left:134px}
+
+/* data structure */
+pre.tree{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.75;margin:0}
+.tree .c{color:var(--muted)}
+.tree .a{color:var(--front)}
+.tree .b{color:var(--claude)}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--bg);font-size:13px;color:var(--muted);font-weight:700}
+tr:last-child td{border-bottom:0}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;background:var(--bg);
+  padding:1px 5px;border-radius:4px;border:1px solid var(--line)}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.pill.wait{background:var(--boss-bg);color:var(--boss)}
+.pill.run{background:var(--front-bg);color:var(--front)}
+.pill.done{background:var(--drive-bg);color:var(--drive)}
+.pill.err{background:var(--claude-bg);color:var(--claude)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h4{margin:0 0 8px;font-size:15px}
+.card ul{margin:0;padding-left:18px}
+.card li{margin:3px 0}
+ol.q{padding-left:20px}
+ol.q li{margin:8px 0}
+ol.q li span{color:var(--muted);font-size:14px;display:block}
+
+
+/* swimlane charts */
+.chartwrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;margin:14px 0 8px}
+.chart{display:block;width:100%;min-width:780px;height:auto;font-family:inherit}
+.chart .lane{fill:var(--cb);stroke:var(--line);stroke-width:1}
+.chart .lanelabel{fill:var(--c);font-size:14px;font-weight:700}
+.chart .colno{fill:var(--muted);font-size:12px;text-anchor:middle}
+.chart .node{fill:var(--card);stroke:var(--c);stroke-width:2}
+.chart .node.dec{stroke-dasharray:6 4}
+.chart .nt{fill:var(--ink);font-size:14px;font-weight:700;text-anchor:middle}
+.chart .nt.sm{fill:var(--muted);font-size:12px;font-weight:400}
+.chart .edge{fill:none;stroke:var(--muted);stroke-width:1.6}
+.chart .ahead{fill:var(--muted)}
+.chart .elab{fill:var(--muted);font-size:12px}
+.hint{font-size:13px;color:var(--muted);margin:0 0 6px}
+h3.detail{margin-top:22px}
+.hint.m{display:none}
+@media (max-width:720px){.hint.m{display:block}}
+
+@media (max-width:720px){
+  .overview{grid-template-columns:1fr 1fr}
+  .step,.arrow{grid-template-columns:1fr;gap:4px}
+  .who{justify-content:flex-start;text-align:left}
+  .arrow div:first-child{display:none}
+  .loop{padding-left:0}
+  .grid2{grid-template-columns:1fr}
+  h1{font-size:24px}
+}
+
+/* layout with sidebar */
+.topbar{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:8px}
+.langswitch{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--card)}
+.langswitch button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;padding:6px 14px;cursor:pointer}
+.langswitch button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+.lang-block{display:grid;grid-template-columns:200px minmax(0,1fr);gap:32px}
+.lang-block[hidden]{display:none}
+.toc{position:sticky;top:20px;align-self:start;display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);max-height:calc(100vh - 40px);overflow:auto}
+.toc-title{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.06em;margin:0 0 6px 8px}
+.toc a{color:var(--ink);text-decoration:none;font-size:14px;padding:7px 10px;border-radius:8px;border-left:3px solid transparent}
+.toc a:hover{background:var(--bg)}
+.toc a.active{background:var(--bg);border-left-color:var(--accent);font-weight:700}
+section{scroll-margin-top:16px}
+section:first-child h1{margin-top:0}
+@media (max-width:860px){
+  .lang-block{grid-template-columns:minmax(0,1fr);gap:12px}
+  .toc{top:0;flex-direction:row;overflow-x:auto;max-height:none;border-radius:0;margin:0 -16px;padding:8px 12px;border-left:0;border-right:0;z-index:5;white-space:nowrap}
+  .toc-title{display:none}
+  .toc a{border-left:0;border-bottom:3px solid transparent;border-radius:6px;flex:0 0 auto}
+  .toc a.active{border-bottom-color:var(--accent)}
+  section{scroll-margin-top:60px}
+}
+
+/* layout with sidebar */
+.topbar{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:8px}
+.langswitch{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--card)}
+.langswitch button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;padding:6px 14px;cursor:pointer}
+.langswitch button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+.lang-block{display:grid;grid-template-columns:200px minmax(0,1fr);gap:32px}
+.lang-block[hidden]{display:none}
+.toc{position:sticky;top:20px;align-self:start;display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);max-height:calc(100vh - 40px);overflow:auto}
+.toc-title{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.06em;margin:0 0 6px 8px}
+.toc a{color:var(--ink);text-decoration:none;font-size:14px;padding:7px 10px;border-radius:8px;border-left:3px solid transparent}
+.toc a:hover{background:var(--bg)}
+.toc a.active{background:var(--bg);border-left-color:var(--accent);font-weight:700}
+section{scroll-margin-top:16px}
+section:first-child h1{margin-top:0}
+@media (max-width:860px){
+  .lang-block{grid-template-columns:minmax(0,1fr);gap:12px}
+  .toc{top:0;flex-direction:row;overflow-x:auto;max-height:none;border-radius:0;margin:0 -16px;padding:8px 12px;border-left:0;border-right:0;z-index:5;white-space:nowrap}
+  .toc-title{display:none}
+  .toc a{border-left:0;border-bottom:3px solid transparent;border-radius:6px;flex:0 0 auto}
+  .toc a.active{border-bottom-color:var(--accent)}
+  section{scroll-margin-top:60px}
+}
+.gift{display:inline-block;margin:-16px 0 24px;padding:6px 12px;border-radius:8px;background:var(--boss-bg);color:var(--boss);font-size:13px;font-weight:700}
+
+/* layout with sidebar */
+.topbar{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:8px}
+.langswitch{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--card)}
+.langswitch button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;padding:6px 14px;cursor:pointer}
+.langswitch button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+.lang-block{display:grid;grid-template-columns:200px minmax(0,1fr);gap:32px}
+.lang-block[hidden]{display:none}
+.toc{position:sticky;top:20px;align-self:start;display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);max-height:calc(100vh - 40px);overflow:auto}
+.toc-title{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.06em;margin:0 0 6px 8px}
+.toc a{color:var(--ink);text-decoration:none;font-size:14px;padding:7px 10px;border-radius:8px;border-left:3px solid transparent}
+.toc a:hover{background:var(--bg)}
+.toc a.active{background:var(--bg);border-left-color:var(--accent);font-weight:700}
+section{scroll-margin-top:16px}
+.head h1{margin-top:0}
+.gift{display:inline-block;margin:-16px 0 8px;padding:6px 12px;border-radius:8px;background:var(--boss-bg);color:var(--boss);font-size:13px;font-weight:700}
+.card.rec{margin:0 0 14px}
+.card.rec p{margin:0 0 8px;color:var(--muted);font-size:14px}
+.card.rec li,.plain li{margin:6px 0}
+.plain{margin:0;padding-left:18px}
+section:first-child h1{margin-top:0}
+@media (max-width:860px){
+  .lang-block{grid-template-columns:minmax(0,1fr);gap:12px}
+  .toc{top:0;flex-direction:row;overflow-x:auto;max-height:none;border-radius:0;margin:0 -16px;padding:8px 12px;border-left:0;border-right:0;z-index:5;white-space:nowrap}
+  .toc-title{display:none}
+  .toc a{border-left:0;border-bottom:3px solid transparent;border-radius:6px;flex:0 0 auto}
+  .toc a.active{border-bottom-color:var(--accent)}
+  section{scroll-margin-top:60px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="topbar"><div class="langswitch" role="group" aria-label="Language"><button data-l="zh" aria-pressed="true">中文</button><button data-l="en" aria-pressed="false">EN</button></div></div>
+<div class="lang-block" data-lang="zh">
+<nav class="toc" aria-label="目錄"><div class="toc-title">目錄</div><a href="#questions-zh" data-t="questions-zh">待討論</a><a href="#overview-zh" data-t="overview-zh">總覽</a><a href="#flow-a-zh" data-t="flow-a-zh">流程 A：會議摘要</a><a href="#flow-b-zh" data-t="flow-b-zh">流程 B：定期報告</a><a href="#data-zh" data-t="data-zh">資料結構</a><a href="#schedule-zh" data-t="schedule-zh">排程規則</a><a href="#notion-zh" data-t="notion-zh">Notion 版本建議</a></nav>
+<main class="content">
+<header class="head">
+<h1>DD 分析流程與資料結構</h1>
+<p class="sub">討論用草案 · 以 Google 雲端硬碟為資料庫，Claude 依排程在後台分析</p>
+<p class="gift">私人工具，不對外分享，送給男友的禮物</p>
+</header>
+<section id="questions-zh">
+<h2><span class="tag">待討論</span>待決定與已確認事項</h2><h3>待決定</h3><ol class="q"><li>流程 B 多久跑一次？<span>每天固定時間，或每週一次</span></li><li>報告要每次產生新的一份，還是每個案子維持一份並持續更新？</li><li>除了 User，還有誰需要登入？<span>不同人是否只能看到特定案子</span></li></ol><h3>已確認事項與建議</h3><div class="card rec"><h4>已確認：有掃描版 PDF</h4><p>掃描檔沒有文字層，數字要先經過文字辨識（OCR）才能分析，表格和小字最容易出錯。建議：</p><ul><li><b>先做 OCR 前處理</b>：掃描檔進資料夾後先轉成「可搜尋版」另存，原檔保留不動；分析一律讀可搜尋版</li><li><b>優先索取原始電子檔</b>：財報、管理報表、財務模型請對方提供 Excel 或原生 PDF，掃描檔只作為最後手段</li><li><b>掃描規格</b>：300 dpi 以上、頁面擺正、避免手機斜拍和陰影</li><li><b>檔名加 _scan</b>：例 <code>2024年報_scan.pdf</code>，系統就知道要走 OCR 流程</li><li><b>標記來源並重點複核</b>：從掃描檔取出的數字在參考數字表標「掃描」；營收、EBITDA、負債、合約金額等關鍵數字一律人工二次核對</li></ul></div><div class="card rec"><h4>已確認：文件包含多種語言</h4><p>合約、財報、訪談可能是不同語言，同一個案子也會混用。建議：</p><ul><li><b>輸出語言統一</b>：報告和參考數字固定用一種語言（由 User 指定），不隨原文切換</li><li><b>引述保留原文</b>：關鍵條款和說法保留原文，並附上翻譯，避免翻譯誤差影響判斷</li><li><b>參考數字表加「原文語言」欄</b>，方便回頭核對</li><li><b>專有名詞不翻</b>：公司名、條款名稱、會計科目保留原文，必要時括號附譯名</li></ul></div>
+</section>
+<section id="overview-zh">
+<h2><span class="tag">總覽</span>四個角色</h2>
+<div class="overview">
+  <div class="ov boss"><b>User</b><small>上傳資料、貼會議摘要、看結果</small></div>
+  <div class="ov front"><b>前端網頁</b><small>Google 帳號登入，選案子、送摘要、看參考數字</small></div>
+  <div class="ov drive"><b>Google 雲端硬碟</b><small>每個案子一個資料夾，存檔案、摘要、報告</small></div>
+  <div class="ov claude"><b>Claude 排程</b><small>定時讀取、分析、寫回，User 不會直接接觸</small></div>
+</div>
+</section>
+<section id="flow-a-zh">
+<h2><span class="tag">流程 A</span>會議摘要 → 參考數字</h2>
+<p class="lead">會議結束後貼上摘要，約 1 小時內在前端看到對應的數字和出處。</p>
+<p class="hint m">← 圖可以左右滑動</p><div class="chartwrap"><svg class="chart" viewBox="0 0 1246 416" role="img" aria-label="Flow A" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="ah-zh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead"/></marker></defs>
+<rect x="0" y="6" width="1246" height="96" class="lane boss"/>
+<text x="12" y="59.0" class="lanelabel boss">User</text>
+<rect x="0" y="102" width="1246" height="96" class="lane front"/>
+<text x="12" y="155.0" class="lanelabel front">前端網頁</text>
+<rect x="0" y="198" width="1246" height="96" class="lane drive"/>
+<text x="12" y="251.0" class="lanelabel drive">Google 雲端硬碟</text>
+<rect x="0" y="294" width="1246" height="96" class="lane claude"/>
+<text x="12" y="347.0" class="lanelabel claude">Claude 排程</text>
+<rect x="123.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="180.0" y="50.0" class="nt">貼上會議摘要</text>
+<text x="180.0" y="68.0" class="nt sm">會議結束後</text>
+<rect x="263.0" y="121.0" width="114" height="58" rx="9" class="node front"/>
+<text x="320.0" y="146.0" class="nt">選案子・送出</text>
+<text x="320.0" y="164.0" class="nt sm">Google 帳號登入</text>
+<rect x="403.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="460.0" y="242.0" class="nt">04 會議摘要</text>
+<text x="460.0" y="260.0" class="nt sm">狀態：待處理</text>
+<rect x="543.0" y="313.0" width="114" height="58" rx="9" class="node claude dec"/>
+<text x="600.0" y="338.0" class="nt">每小時檢查</text>
+<text x="600.0" y="356.0" class="nt sm">有新摘要？</text>
+<rect x="683.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="740.0" y="242.0" class="nt">01 合約</text>
+<text x="740.0" y="260.0" class="nt sm">02 文件・03 財務</text>
+<rect x="683.0" y="313.0" width="114" height="58" rx="9" class="node claude"/>
+<text x="740.0" y="338.0" class="nt">對照資料</text>
+<text x="740.0" y="356.0" class="nt sm">找出參考數字</text>
+<rect x="823.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="880.0" y="242.0" class="nt">寫回摘要文件</text>
+<text x="880.0" y="260.0" class="nt sm">狀態：完成</text>
+<rect x="963.0" y="121.0" width="114" height="58" rx="9" class="node front"/>
+<text x="1020.0" y="146.0" class="nt">顯示數字</text>
+<text x="1020.0" y="164.0" class="nt sm">附檔名＋頁碼</text>
+<rect x="1103.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="1160.0" y="50.0" class="nt">核對・追問</text>
+<text x="1160.0" y="68.0" class="nt sm">點出處看原檔</text>
+<path d="M237.0,54.0 H250.0 V150.0 H263.0" class="edge" marker-end="url(#ah-zh)"/>
+<path d="M377.0,150.0 H390.0 V246.0 H403.0" class="edge" marker-end="url(#ah-zh)"/>
+<path d="M517.0,246.0 H530.0 V342.0 H543.0" class="edge" marker-end="url(#ah-zh)"/>
+<path d="M657.0,342.0 H670.0 V342.0 H683.0" class="edge" marker-end="url(#ah-zh)"/>
+<text x="670.0" y="334.0" class="elab" text-anchor="middle">有</text>
+<path d="M740.0,275.0 V313.0" class="edge" marker-end="url(#ah-zh)"/>
+<text x="748.0" y="298.0" class="elab" text-anchor="start">讀取</text>
+<path d="M797.0,342.0 H810.0 V246.0 H823.0" class="edge" marker-end="url(#ah-zh)"/>
+<path d="M937.0,246.0 H950.0 V150.0 H963.0" class="edge" marker-end="url(#ah-zh)"/>
+<path d="M1077.0,150.0 H1090.0 V54.0 H1103.0" class="edge" marker-end="url(#ah-zh)"/>
+<text x="600.0" y="388.0" class="elab" text-anchor="middle">沒有 → 下個小時再查</text>
+</svg></div>
+<p class="hint">每一橫列是一個角色，虛線框是排程的判斷點。下方是每一步的說明。</p>
+<h3 class="detail">步驟說明</h3>
+<div class="flow"><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">1</span>開啟前端，選案子、貼上會議摘要、送出</div><div class="d">可選填：會議日期、與會者、想特別追的問題</div></div></div><div class="arrow"><div></div><div></div></div><div class="step front"><div class="who">前端網頁</div>
+<div class="box"><div class="t"><span class="num">2</span>把摘要存成一份 Google 文件</div><div class="d">存入該案的「04 會議摘要」，狀態標為 <span class="pill wait">待處理</span></div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude 排程</div>
+<div class="box decision"><div class="t"><span class="num">3</span>每小時檢查：有沒有「待處理」的摘要？</div><div class="d">沒有 → 結束，下個小時再查；有 → 改為 <span class="pill run">處理中</span>，繼續</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude 排程</div>
+<div class="box"><div class="t"><span class="num">4</span>拆解摘要中的議題，到 01–03 資料夾找對應資料</div><div class="d">例：摘要提到「毛利率下滑」→ 到財務資料找近三年毛利率、到合約找主要供應商條款</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude 排程</div>
+<div class="box"><div class="t"><span class="num">5</span>把參考數字寫回同一份摘要文件下方</div><div class="d">每個數字都附出處（檔名＋頁碼），狀態改為 <span class="pill done">完成</span></div></div></div><div class="arrow"><div></div><div></div></div><div class="step front"><div class="who">前端網頁</div>
+<div class="box"><div class="t"><span class="num">6</span>顯示結果</div><div class="d">摘要列表顯示狀態；點進去看參考數字，點出處可以開原始檔案核對</div></div></div><div class="arrow"><div></div><div></div></div><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">7</span>閱讀、核對，需要時補資料或再送一次摘要</div></div></div></div>
+</section>
+<section id="flow-b-zh">
+<h2><span class="tag">流程 B</span>資料夾 → 定期分析報告</h2>
+<p class="lead">不需要任何操作，定期產出整體分析，放在 Google 文件裡。</p>
+<p class="hint m">← 圖可以左右滑動</p><div class="chartwrap"><svg class="chart" viewBox="0 0 1106 416" role="img" aria-label="Flow B" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="ah-zhb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead"/></marker></defs>
+<rect x="0" y="6" width="1106" height="96" class="lane boss"/>
+<text x="12" y="59.0" class="lanelabel boss">User</text>
+<rect x="0" y="102" width="1106" height="96" class="lane front"/>
+<text x="12" y="155.0" class="lanelabel front">前端網頁</text>
+<rect x="0" y="198" width="1106" height="96" class="lane drive"/>
+<text x="12" y="251.0" class="lanelabel drive">Google 雲端硬碟</text>
+<rect x="0" y="294" width="1106" height="96" class="lane claude"/>
+<text x="12" y="347.0" class="lanelabel claude">Claude 排程</text>
+<rect x="123.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="180.0" y="50.0" class="nt">上傳檔案</text>
+<text x="180.0" y="68.0" class="nt sm">隨時丟進資料夾</text>
+<rect x="263.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="320.0" y="242.0" class="nt">01 合約</text>
+<text x="320.0" y="260.0" class="nt sm">02 文件・03 財務</text>
+<rect x="403.0" y="313.0" width="114" height="58" rx="9" class="node claude dec"/>
+<text x="460.0" y="338.0" class="nt">定時掃描</text>
+<text x="460.0" y="356.0" class="nt sm">有新增或修改？</text>
+<rect x="543.0" y="313.0" width="114" height="58" rx="9" class="node claude"/>
+<text x="600.0" y="338.0" class="nt">分析變動檔案</text>
+<text x="600.0" y="356.0" class="nt sm">財務・合約・文件</text>
+<rect x="683.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="740.0" y="242.0" class="nt">05 分析報告</text>
+<text x="740.0" y="260.0" class="nt sm">＋更新處理紀錄</text>
+<rect x="823.0" y="121.0" width="114" height="58" rx="9" class="node front"/>
+<text x="880.0" y="146.0" class="nt">顯示最新報告</text>
+<text x="880.0" y="164.0" class="nt sm">可看歷次版本</text>
+<rect x="963.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="1020.0" y="50.0" class="nt">閱讀報告</text>
+<text x="1020.0" y="68.0" class="nt sm">依建議補件</text>
+<path d="M237.0,54.0 H250.0 V246.0 H263.0" class="edge" marker-end="url(#ah-zhb)"/>
+<path d="M377.0,246.0 H390.0 V342.0 H403.0" class="edge" marker-end="url(#ah-zhb)"/>
+<path d="M517.0,342.0 H530.0 V342.0 H543.0" class="edge" marker-end="url(#ah-zhb)"/>
+<text x="530.0" y="334.0" class="elab" text-anchor="middle">有</text>
+<path d="M657.0,342.0 H670.0 V246.0 H683.0" class="edge" marker-end="url(#ah-zhb)"/>
+<path d="M797.0,246.0 H810.0 V150.0 H823.0" class="edge" marker-end="url(#ah-zhb)"/>
+<path d="M937.0,150.0 H950.0 V54.0 H963.0" class="edge" marker-end="url(#ah-zhb)"/>
+<text x="460.0" y="388.0" class="elab" text-anchor="middle">沒有 → 下次排程再查</text>
+</svg></div>
+<h3 class="detail">步驟說明</h3>
+<div class="flow"><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">1</span>隨時把檔案丟進對應資料夾</div><div class="d">合約 → 01，一般文件 → 02，財務資料 → 03</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude 排程</div>
+<div class="box decision"><div class="t"><span class="num">2</span>固定時間掃描：有沒有新增或修改的檔案？</div><div class="d">比對「處理紀錄」，沒有變動 → 結束；有 → 只處理變動的部分</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude 排程</div>
+<div class="box"><div class="t"><span class="num">3</span>依資料類型分析</div><div class="d">財務：關鍵指標、趨勢、異常值 · 合約：重要條款、風險、到期日 · 文件：重點摘要、與財務數字的矛盾</div></div></div><div class="arrow"><div></div><div></div></div><div class="step drive"><div class="who">Google 雲端硬碟</div>
+<div class="box"><div class="t"><span class="num">4</span>產出報告到「05 分析報告」，並更新處理紀錄</div><div class="d">檔名帶日期，可比較前後版本的變化</div></div></div><div class="arrow"><div></div><div></div></div><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">5</span>在前端或雲端硬碟開啟最新報告</div></div></div></div>
+</section>
+<section id="data-zh">
+<h2><span class="tag">資料結構</span>雲端硬碟怎麼放</h2>
+<p class="lead">每個案子一套相同結構；案子之間互相獨立。</p>
+<pre class="tree">DD 分析/
+├─ <span class="c">_系統/</span>
+│  ├─ 案子清單              <span class="c">← 前端下拉選單從這裡讀</span>
+│  └─ 處理紀錄              <span class="c">← 記錄每個檔案最後分析的時間</span>
+│
+└─ 案子名稱（例：ProjectFalcon）/
+   ├─ 01 合約/              <span class="c">股權、借款、供應商、客戶、租約…</span>
+   ├─ 02 文件/              <span class="c">簡報、管理層說明、產業報告…</span>
+   ├─ 03 財務資料/          <span class="c">財報、管理報表、財務模型（PDF / Excel）</span>
+   ├─ <span class="a">04 會議摘要/</span>          <span class="c">← 流程 A：前端寫入、Claude 補上參考數字</span>
+   │  └─ 2026-10-23_管理層訪談
+   └─ <span class="b">05 分析報告/</span>          <span class="c">← 流程 B：Claude 定期產出</span>
+      └─ 2026-10-23_定期分析報告</pre>
+<h3>會議摘要文件的格式（流程 A）</h3><div class="tablewrap"><table><tr><th>欄位</th><th>誰填</th><th>說明</th></tr><tr><td>案子</td><td>User</td><td>從前端下拉選擇</td></tr><tr><td>會議日期、與會者</td><td>User</td><td>選填</td></tr><tr><td>摘要內容</td><td>User</td><td>直接貼上，不用整理格式</td></tr><tr><td>想追的問題</td><td>User</td><td>選填，例如「確認應收帳款天數」</td></tr><tr><td>狀態</td><td>系統</td><td><span class="pill wait">待處理</span> <span class="pill run">處理中</span> <span class="pill done">完成</span> <span class="pill err">需補資料</span></td></tr><tr><td>參考數字表</td><td>Claude</td><td>議題｜數字｜期間｜出處（檔名＋頁碼）｜備註</td></tr><tr><td>找不到的資料</td><td>Claude</td><td>列出摘要提到、但資料夾裡沒有的資訊，提醒補件</td></tr></table></div>
+<h3>參考數字表範例</h3><div class="tablewrap"><table><tr><th>議題</th><th>數字</th><th>期間</th><th>出處</th><th>備註</th></tr><tr><td>毛利率下滑</td><td>38.2% → 33.5%</td><td>FY2023–FY2025</td><td>03／2025 年報.pdf p.12</td><td>主要來自原料成本</td></tr><tr><td>大客戶集中度</td><td>前三大占營收 61%</td><td>FY2025</td><td>03／管理報表.xlsx「客戶」分頁</td><td>—</td></tr><tr><td>供應商合約</td><td>2027/03 到期，無自動續約</td><td>—</td><td>01／供應合約_A.pdf §8.2</td><td>需確認續約進度</td></tr></table></div>
+<p class="lead" style="margin-top:8px;font-size:13px">＊範例數字僅示意格式。</p>
+<h3>定期分析報告的結構（流程 B）</h3><div class="grid2"><div class="card"><h4>1. 本期變動</h4><ul><li>新增／修改了哪些檔案</li><li>與上一份報告相比的差異</li></ul></div><div class="card"><h4>2. 財務分析</h4><ul><li>營收、毛利、EBITDA、現金流趨勢</li><li>異常值與需要追問的地方</li></ul></div><div class="card"><h4>3. 合約重點</h4><ul><li>控制權變更、限制條款、到期日</li><li>潛在風險條款</li></ul></div><div class="card"><h4>4. 交叉比對與待確認事項</h4><ul><li>文件說法與財務數字不一致處</li><li>建議補件清單</li></ul></div></div>
+</section>
+<section id="schedule-zh">
+<h2><span class="tag">排程</span>頻率與規則</h2><div class="tablewrap"><table><tr><th>項目</th><th>流程 A：會議摘要</th><th>流程 B：定期報告</th></tr><tr><td>觸發方式</td><td>User 送出摘要</td><td>固定時間</td></tr><tr><td>檢查頻率</td><td>每小時</td><td>待定（每天或每週）</td></tr><tr><td>結果出現在</td><td>前端＋該份摘要文件</td><td>05 分析報告</td></tr><tr><td>處理範圍</td><td>只處理「待處理」的摘要</td><td>只處理新增或修改的檔案</td></tr><tr><td>預計等待時間</td><td>約 1 小時內</td><td>依排程時間</td></tr></table></div>
+</section>
+<section id="notion-zh">
+<h2><span class="tag">Notion</span>Notion 版本建議</h2><p class="lead">用 Notion 取代流程 A 的前端網頁：User 直接在 Notion 寫會議摘要，不需要另外開發網頁，手機和電腦都能用。合約、財務等大檔案仍放雲端硬碟，Notion 只放資料夾連結。</p>
+<pre class="tree">DD 分析（主頁）
+├─ 資料庫：案子
+└─ 資料庫：會議摘要      <span class='c'>← 每場會議一頁，關聯到案子</span></pre>
+<h3>資料庫一：案子</h3><div class="tablewrap"><table><tr><th>欄位</th><th>類型</th><th>說明</th></tr><tr><td>案子名稱</td><td>標題</td><td>例：ProjectFalcon</td></tr><tr><td>狀態</td><td>選項</td><td>進行中／暫停／結案</td></tr><tr><td>產業</td><td>選項</td><td>方便篩選</td></tr><tr><td>檔案資料夾</td><td>網址</td><td>連到雲端硬碟的案子資料夾</td></tr><tr><td>會議摘要</td><td>關聯</td><td>自動列出此案所有會議</td></tr></table></div>
+<h3>資料庫二：會議摘要</h3><div class="tablewrap"><table><tr><th>欄位</th><th>類型</th><th>說明</th></tr><tr><td>會議名稱</td><td>標題</td><td>例：2026-10-23 管理層訪談</td></tr><tr><td>案子</td><td>關聯</td><td>連到「案子」資料庫</td></tr><tr><td>會議日期</td><td>日期</td><td></td></tr><tr><td>會議類型</td><td>選項</td><td>管理層訪談／專家訪談／內部討論／實地查核</td></tr><tr><td>與會者</td><td>文字</td><td></td></tr><tr><td>想追的問題</td><td>文字</td><td>選填</td></tr><tr><td>狀態</td><td>選項</td><td><span class="pill wait">待處理</span> <span class="pill run">處理中</span> <span class="pill done">完成</span> <span class="pill err">需補資料</span></td></tr></table></div>
+<div class="grid2" style="margin-top:14px">
+<div class="card"><h4>每頁固定範本</h4><ul class="plain"><li><b>會議摘要</b>：直接貼上，不用整理格式</li><li><b>重點議題</b>：條列這場會議談到的主題</li><li><b>參考數字</b>：表格「議題｜數字｜期間｜出處｜原文語言｜備註」</li><li><b>找不到的資料</b>：提到了但手上沒有的資訊</li><li><b>後續待辦</b>：勾選清單，例「請管理層提供 2025 年客戶明細」</li></ul></div>
+<div class="card"><h4>建議檢視</h4><ul class="plain"><li><b>看板</b>：依狀態分欄，看出哪些還沒處理</li><li><b>行事曆</b>：依會議日期排列</li><li><b>依案子分組</b>：打開案子就看到所有會議</li></ul></div>
+</div>
+<h3>與 Google 前端版比較</h3>
+<div class="tablewrap"><table><tr><th></th><th>Google 前端版</th><th>Notion 版</th></tr><tr><td>開發量</td><td>要寫前端網頁</td><td>建好資料庫和範本即可</td></tr><tr><td>輸入方式</td><td>網頁表單</td><td>Notion 頁面（含手機 App）</td></tr><tr><td>外觀彈性</td><td>可完全客製</td><td>依 Notion 版型</td></tr><tr><td>檔案存放</td><td>雲端硬碟</td><td>雲端硬碟（Notion 放連結）</td></tr><tr><td>分析層</td><td>依前述流程</td><td>可接 Notion 內建 AI 或其他可用的 AI 服務，需確認方案與所在地是否支援</td></tr></table></div>
+</section>
+</main>
+</div>
+<div class="lang-block" data-lang="en" hidden>
+<nav class="toc" aria-label="Contents"><div class="toc-title">Contents</div><a href="#questions-en" data-t="questions-en">Open questions</a><a href="#overview-en" data-t="overview-en">Overview</a><a href="#flow-a-en" data-t="flow-a-en">Flow A: Meeting notes</a><a href="#flow-b-en" data-t="flow-b-en">Flow B: Reports</a><a href="#data-en" data-t="data-en">Data structure</a><a href="#schedule-en" data-t="schedule-en">Schedule</a><a href="#notion-en" data-t="notion-en">Notion version</a></nav>
+<main class="content">
+<header class="head">
+<h1>DD Analysis: Workflow & Data Structure</h1>
+<p class="sub">Draft for discussion · Google Drive as the data store, Claude analyzing in the background on a schedule</p>
+<p class="gift">Private tool, not for external sharing: a gift for my boyfriend</p>
+</header>
+<section id="questions-en">
+<h2><span class="tag">Discuss</span>Decisions & confirmed items</h2><h3>To decide</h3><ol class="q"><li>How often should Flow B run?<span>Daily at a set time, or weekly</span></li><li>A new report each run, or one living report per deal?</li><li>Who else needs to sign in besides the User?<span>Should some people see only certain deals?</span></li></ol><h3>Confirmed items & recommendations</h3><div class="card rec"><h4>Confirmed: scanned PDFs exist</h4><p>Scans have no text layer, so figures must go through OCR first; tables and small print are the most error-prone. Recommendations:</p><ul><li><b>OCR first</b>: convert each scan to a searchable copy and keep the original untouched; analysis always reads the searchable copy</li><li><b>Ask for native files</b>: request Excel or born-digital PDFs for financials, management accounts and models; scans are the last resort</li><li><b>Scan quality</b>: 300 dpi or higher, pages straight, no angled phone shots or shadows</li><li><b>Add _scan to file names</b>: e.g. <code>AR2024_scan.pdf</code>, so the system routes it through OCR</li><li><b>Flag and re-check</b>: figures taken from scans are marked “scan” in the reference table; key figures (revenue, EBITDA, debt, contract values) are always double-checked by hand</li></ul></div><div class="card rec"><h4>Confirmed: documents come in many languages</h4><p>Contracts, financials and interviews may each be in a different language, even within one deal. Recommendations:</p><ul><li><b>One output language</b>: reports and figures always use a single language chosen by the User, regardless of the source</li><li><b>Quote the original</b>: key clauses and statements stay in the source language with a translation beside them</li><li><b>Add a “Source language” column</b> to the reference table for easier checking</li><li><b>Keep proper nouns</b>: company names, clause titles and account names stay as written, with a translation in brackets if needed</li></ul></div>
+</section>
+<section id="overview-en">
+<h2><span class="tag">Overview</span>Four roles</h2>
+<div class="overview">
+  <div class="ov boss"><b>User</b><small>Uploads files, pastes meeting notes, reads results</small></div>
+  <div class="ov front"><b>Front end</b><small>Google sign-in; pick a deal, submit notes, view figures</small></div>
+  <div class="ov drive"><b>Google Drive</b><small>One folder per deal for files, notes and reports</small></div>
+  <div class="ov claude"><b>Claude (scheduled)</b><small>Reads, analyzes and writes back on schedule; never touched by the User</small></div>
+</div>
+</section>
+<section id="flow-a-en">
+<h2><span class="tag">Flow A</span>Meeting notes → Reference figures</h2>
+<p class="lead">Paste the summary after a meeting; within about an hour the matching figures and sources appear in the front end.</p>
+<p class="hint m">← Swipe to see the full chart</p><div class="chartwrap"><svg class="chart" viewBox="0 0 1246 416" role="img" aria-label="Flow A" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="ah-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead"/></marker></defs>
+<rect x="0" y="6" width="1246" height="96" class="lane boss"/>
+<text x="12" y="59.0" class="lanelabel boss">User</text>
+<rect x="0" y="102" width="1246" height="96" class="lane front"/>
+<text x="12" y="155.0" class="lanelabel front">Front end</text>
+<rect x="0" y="198" width="1246" height="96" class="lane drive"/>
+<text x="12" y="251.0" class="lanelabel drive">Google Drive</text>
+<rect x="0" y="294" width="1246" height="96" class="lane claude"/>
+<text x="12" y="347.0" class="lanelabel claude">Claude (scheduled)</text>
+<rect x="123.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="180.0" y="50.0" class="nt">Paste summary</text>
+<text x="180.0" y="68.0" class="nt sm">After the meeting</text>
+<rect x="263.0" y="121.0" width="114" height="58" rx="9" class="node front"/>
+<text x="320.0" y="146.0" class="nt">Pick + submit</text>
+<text x="320.0" y="164.0" class="nt sm">Google sign-in</text>
+<rect x="403.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="460.0" y="242.0" class="nt">04 Notes</text>
+<text x="460.0" y="260.0" class="nt sm">Status: Pending</text>
+<rect x="543.0" y="313.0" width="114" height="58" rx="9" class="node claude dec"/>
+<text x="600.0" y="338.0" class="nt">Hourly check</text>
+<text x="600.0" y="356.0" class="nt sm">New summary?</text>
+<rect x="683.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="740.0" y="242.0" class="nt">01 Contracts</text>
+<text x="740.0" y="260.0" class="nt sm">02 Docs・03 Fin.</text>
+<rect x="683.0" y="313.0" width="114" height="58" rx="9" class="node claude"/>
+<text x="740.0" y="338.0" class="nt">Cross-check</text>
+<text x="740.0" y="356.0" class="nt sm">Find figures</text>
+<rect x="823.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="880.0" y="242.0" class="nt">Write back</text>
+<text x="880.0" y="260.0" class="nt sm">Status: Done</text>
+<rect x="963.0" y="121.0" width="114" height="58" rx="9" class="node front"/>
+<text x="1020.0" y="146.0" class="nt">Show figures</text>
+<text x="1020.0" y="164.0" class="nt sm">File + page ref</text>
+<rect x="1103.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="1160.0" y="50.0" class="nt">Verify</text>
+<text x="1160.0" y="68.0" class="nt sm">Open source file</text>
+<path d="M237.0,54.0 H250.0 V150.0 H263.0" class="edge" marker-end="url(#ah-en)"/>
+<path d="M377.0,150.0 H390.0 V246.0 H403.0" class="edge" marker-end="url(#ah-en)"/>
+<path d="M517.0,246.0 H530.0 V342.0 H543.0" class="edge" marker-end="url(#ah-en)"/>
+<path d="M657.0,342.0 H670.0 V342.0 H683.0" class="edge" marker-end="url(#ah-en)"/>
+<text x="670.0" y="334.0" class="elab" text-anchor="middle">Yes</text>
+<path d="M740.0,275.0 V313.0" class="edge" marker-end="url(#ah-en)"/>
+<text x="748.0" y="298.0" class="elab" text-anchor="start">Read</text>
+<path d="M797.0,342.0 H810.0 V246.0 H823.0" class="edge" marker-end="url(#ah-en)"/>
+<path d="M937.0,246.0 H950.0 V150.0 H963.0" class="edge" marker-end="url(#ah-en)"/>
+<path d="M1077.0,150.0 H1090.0 V54.0 H1103.0" class="edge" marker-end="url(#ah-en)"/>
+<text x="600.0" y="388.0" class="elab" text-anchor="middle">No → check next hour</text>
+</svg></div>
+<p class="hint">Each row is a role; dashed boxes are scheduled checks. Step details follow.</p>
+<h3 class="detail">Steps</h3>
+<div class="flow"><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">1</span>Open the front end, pick a deal, paste the meeting summary, submit</div><div class="d">Optional: meeting date, attendees, specific questions to chase</div></div></div><div class="arrow"><div></div><div></div></div><div class="step front"><div class="who">Front end</div>
+<div class="box"><div class="t"><span class="num">2</span>Save the summary as a Google Doc</div><div class="d">Stored in the deal's “04 Meeting notes”, marked <span class="pill wait">Pending</span></div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude (scheduled)</div>
+<div class="box decision"><div class="t"><span class="num">3</span>Hourly check: any pending summaries?</div><div class="d">None → stop, check next hour; found → mark <span class="pill run">Processing</span> and continue</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude (scheduled)</div>
+<div class="box"><div class="t"><span class="num">4</span>Break the summary into topics and look them up in folders 01–03</div><div class="d">e.g. “margin decline” → 3-year gross margin from financials, key supplier terms from contracts</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude (scheduled)</div>
+<div class="box"><div class="t"><span class="num">5</span>Write the reference figures back into the same summary doc</div><div class="d">Every figure cites its source (file + page); status set to <span class="pill done">Done</span></div></div></div><div class="arrow"><div></div><div></div></div><div class="step front"><div class="who">Front end</div>
+<div class="box"><div class="t"><span class="num">6</span>Show results</div><div class="d">Summary list shows status; open one to see figures, click a source to open the original file</div></div></div><div class="arrow"><div></div><div></div></div><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">7</span>Review and verify; add documents or resubmit if needed</div></div></div></div>
+</section>
+<section id="flow-b-en">
+<h2><span class="tag">Flow B</span>Folders → Periodic reports</h2>
+<p class="lead">No action needed: an overall analysis is produced on schedule as a Google Doc.</p>
+<p class="hint m">← Swipe to see the full chart</p><div class="chartwrap"><svg class="chart" viewBox="0 0 1106 416" role="img" aria-label="Flow B" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="ah-enb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead"/></marker></defs>
+<rect x="0" y="6" width="1106" height="96" class="lane boss"/>
+<text x="12" y="59.0" class="lanelabel boss">User</text>
+<rect x="0" y="102" width="1106" height="96" class="lane front"/>
+<text x="12" y="155.0" class="lanelabel front">Front end</text>
+<rect x="0" y="198" width="1106" height="96" class="lane drive"/>
+<text x="12" y="251.0" class="lanelabel drive">Google Drive</text>
+<rect x="0" y="294" width="1106" height="96" class="lane claude"/>
+<text x="12" y="347.0" class="lanelabel claude">Claude (scheduled)</text>
+<rect x="123.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="180.0" y="50.0" class="nt">Upload files</text>
+<text x="180.0" y="68.0" class="nt sm">Any time</text>
+<rect x="263.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="320.0" y="242.0" class="nt">01 Contracts</text>
+<text x="320.0" y="260.0" class="nt sm">02 Docs・03 Fin.</text>
+<rect x="403.0" y="313.0" width="114" height="58" rx="9" class="node claude dec"/>
+<text x="460.0" y="338.0" class="nt">Scheduled scan</text>
+<text x="460.0" y="356.0" class="nt sm">New or changed?</text>
+<rect x="543.0" y="313.0" width="114" height="58" rx="9" class="node claude"/>
+<text x="600.0" y="338.0" class="nt">Analyze changes</text>
+<text x="600.0" y="356.0" class="nt sm">Fin.・Contr.・Docs</text>
+<rect x="683.0" y="217.0" width="114" height="58" rx="9" class="node drive"/>
+<text x="740.0" y="242.0" class="nt">05 Reports</text>
+<text x="740.0" y="260.0" class="nt sm">+ update log</text>
+<rect x="823.0" y="121.0" width="114" height="58" rx="9" class="node front"/>
+<text x="880.0" y="146.0" class="nt">Show latest</text>
+<text x="880.0" y="164.0" class="nt sm">Past versions kept</text>
+<rect x="963.0" y="25.0" width="114" height="58" rx="9" class="node boss"/>
+<text x="1020.0" y="50.0" class="nt">Read report</text>
+<text x="1020.0" y="68.0" class="nt sm">Add missing docs</text>
+<path d="M237.0,54.0 H250.0 V246.0 H263.0" class="edge" marker-end="url(#ah-enb)"/>
+<path d="M377.0,246.0 H390.0 V342.0 H403.0" class="edge" marker-end="url(#ah-enb)"/>
+<path d="M517.0,342.0 H530.0 V342.0 H543.0" class="edge" marker-end="url(#ah-enb)"/>
+<text x="530.0" y="334.0" class="elab" text-anchor="middle">Yes</text>
+<path d="M657.0,342.0 H670.0 V246.0 H683.0" class="edge" marker-end="url(#ah-enb)"/>
+<path d="M797.0,246.0 H810.0 V150.0 H823.0" class="edge" marker-end="url(#ah-enb)"/>
+<path d="M937.0,150.0 H950.0 V54.0 H963.0" class="edge" marker-end="url(#ah-enb)"/>
+<text x="460.0" y="388.0" class="elab" text-anchor="middle">No → wait for next run</text>
+</svg></div>
+<h3 class="detail">Steps</h3>
+<div class="flow"><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">1</span>Drop files into the right folder at any time</div><div class="d">Contracts → 01, documents → 02, financials → 03</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude (scheduled)</div>
+<div class="box decision"><div class="t"><span class="num">2</span>Scheduled scan: any new or changed files?</div><div class="d">Compare with the processing log; no change → stop; changed → process only what changed</div></div></div><div class="arrow"><div></div><div></div></div><div class="step claude"><div class="who">Claude (scheduled)</div>
+<div class="box"><div class="t"><span class="num">3</span>Analyze by document type</div><div class="d">Financials: key metrics, trends, outliers · Contracts: key terms, risks, expiry dates · Documents: key points, conflicts with the numbers</div></div></div><div class="arrow"><div></div><div></div></div><div class="step drive"><div class="who">Google Drive</div>
+<div class="box"><div class="t"><span class="num">4</span>Write the report to “05 Reports” and update the log</div><div class="d">Dated file names so versions can be compared</div></div></div><div class="arrow"><div></div><div></div></div><div class="step boss"><div class="who">User</div>
+<div class="box"><div class="t"><span class="num">5</span>Open the latest report in the front end or Drive</div></div></div></div>
+</section>
+<section id="data-en">
+<h2><span class="tag">Data</span>How Drive is organized</h2>
+<p class="lead">Every deal uses the same structure; deals are kept separate.</p>
+<pre class="tree">DD Analysis/
+├─ <span class="c">_system/</span>
+│  ├─ Deal list             <span class="c">← feeds the front-end dropdown</span>
+│  └─ Processing log        <span class="c">← last analysis time per file</span>
+│
+└─ Deal name (e.g. ProjectFalcon)/
+   ├─ 01 Contracts/         <span class="c">equity, loans, suppliers, customers, leases…</span>
+   ├─ 02 Documents/         <span class="c">decks, management notes, industry reports…</span>
+   ├─ 03 Financials/        <span class="c">statements, mgmt accounts, models (PDF / Excel)</span>
+   ├─ <span class="a">04 Meeting notes/</span>     <span class="c">← Flow A: written by front end, figures added by Claude</span>
+   │  └─ 2026-10-23_Management interview
+   └─ <span class="b">05 Reports/</span>           <span class="c">← Flow B: generated on schedule by Claude</span>
+      └─ 2026-10-23_Periodic report</pre>
+<h3>Meeting note format (Flow A)</h3><div class="tablewrap"><table><tr><th>Field</th><th>Filled by</th><th>Notes</th></tr><tr><td>Deal</td><td>User</td><td>Chosen from the dropdown</td></tr><tr><td>Date, attendees</td><td>User</td><td>Optional</td></tr><tr><td>Summary</td><td>User</td><td>Paste as is, no formatting needed</td></tr><tr><td>Questions to chase</td><td>User</td><td>Optional, e.g. “confirm receivable days”</td></tr><tr><td>Status</td><td>System</td><td><span class="pill wait">Pending</span> <span class="pill run">Processing</span> <span class="pill done">Done</span> <span class="pill err">Needs docs</span></td></tr><tr><td>Reference table</td><td>Claude</td><td>Topic | Figure | Period | Source (file + page) | Note</td></tr><tr><td>Missing data</td><td>Claude</td><td>Items mentioned in the summary but not found in the folders</td></tr></table></div>
+<h3>Reference table example</h3><div class="tablewrap"><table><tr><th>Topic</th><th>Figure</th><th>Period</th><th>Source</th><th>Note</th></tr><tr><td>Margin decline</td><td>38.2% → 33.5%</td><td>FY2023–FY2025</td><td>03 / Annual report 2025.pdf p.12</td><td>Mainly raw material costs</td></tr><tr><td>Customer concentration</td><td>Top 3 = 61% of revenue</td><td>FY2025</td><td>03 / Mgmt accounts.xlsx “Customers” tab</td><td>—</td></tr><tr><td>Supplier contract</td><td>Expires 2027/03, no auto-renewal</td><td>—</td><td>01 / Supply agreement_A.pdf §8.2</td><td>Confirm renewal status</td></tr></table></div>
+<p class="lead" style="margin-top:8px;font-size:13px">* Example figures illustrate the format only.</p>
+<h3>Periodic report outline (Flow B)</h3><div class="grid2"><div class="card"><h4>1. What changed</h4><ul><li>Files added or changed</li><li>Differences from the last report</li></ul></div><div class="card"><h4>2. Financial analysis</h4><ul><li>Revenue, margin, EBITDA, cash flow trends</li><li>Outliers and follow-up points</li></ul></div><div class="card"><h4>3. Contract highlights</h4><ul><li>Change of control, covenants, expiry dates</li><li>Potential risk clauses</li></ul></div><div class="card"><h4>4. Cross-checks and open items</h4><ul><li>Where documents and numbers disagree</li><li>Suggested document requests</li></ul></div></div>
+</section>
+<section id="schedule-en">
+<h2><span class="tag">Schedule</span>Frequency & rules</h2><div class="tablewrap"><table><tr><th>Item</th><th>Flow A: Meeting notes</th><th>Flow B: Reports</th></tr><tr><td>Trigger</td><td>User submits a summary</td><td>Fixed schedule</td></tr><tr><td>Frequency</td><td>Hourly</td><td>TBD (daily or weekly)</td></tr><tr><td>Results appear in</td><td>Front end + the summary doc</td><td>05 Reports</td></tr><tr><td>Scope</td><td>Pending summaries only</td><td>New or changed files only</td></tr><tr><td>Expected wait</td><td>Within about 1 hour</td><td>Per schedule</td></tr></table></div>
+</section>
+<section id="notion-en">
+<h2><span class="tag">Notion</span>Notion version</h2><p class="lead">Notion replaces the Flow A front end: the User writes meeting notes directly in Notion, with no web page to build, on phone or desktop. Large files stay in Drive; Notion only links to the folder.</p>
+<pre class="tree">DD Analysis (home)
+├─ Database: Deals
+└─ Database: Meeting notes   <span class='c'>← one page per meeting, linked to a deal</span></pre>
+<h3>Database 1: Deals</h3><div class="tablewrap"><table><tr><th>Property</th><th>Type</th><th>Notes</th></tr><tr><td>Deal name</td><td>Title</td><td>e.g. ProjectFalcon</td></tr><tr><td>Status</td><td>Select</td><td>Active / On hold / Closed</td></tr><tr><td>Industry</td><td>Select</td><td>For filtering</td></tr><tr><td>File folder</td><td>URL</td><td>Link to the deal's Drive folder</td></tr><tr><td>Meeting notes</td><td>Relation</td><td>Lists every meeting for the deal</td></tr></table></div>
+<h3>Database 2: Meeting notes</h3><div class="tablewrap"><table><tr><th>Property</th><th>Type</th><th>Notes</th></tr><tr><td>Meeting</td><td>Title</td><td>e.g. 2026-10-23 Management interview</td></tr><tr><td>Deal</td><td>Relation</td><td>Links to the Deals database</td></tr><tr><td>Date</td><td>Date</td><td></td></tr><tr><td>Type</td><td>Select</td><td>Management / Expert / Internal / Site visit</td></tr><tr><td>Attendees</td><td>Text</td><td></td></tr><tr><td>Questions to chase</td><td>Text</td><td>Optional</td></tr><tr><td>Status</td><td>Select</td><td><span class="pill wait">Pending</span> <span class="pill run">Processing</span> <span class="pill done">Done</span> <span class="pill err">Needs docs</span></td></tr></table></div>
+<div class="grid2" style="margin-top:14px">
+<div class="card"><h4>Page template</h4><ul class="plain"><li><b>Summary</b>: paste as is</li><li><b>Key topics</b>: bullet the topics discussed</li><li><b>Reference figures</b>: table of Topic | Figure | Period | Source | Source language | Note</li><li><b>Missing data</b>: mentioned but not on hand</li><li><b>Follow-ups</b>: checklist, e.g. “request 2025 customer list from management”</li></ul></div>
+<div class="card"><h4>Suggested views</h4><ul class="plain"><li><b>Board</b>: grouped by status to see what is pending</li><li><b>Calendar</b>: by meeting date</li><li><b>Grouped by deal</b>: open a deal to see all its meetings</li></ul></div>
+</div>
+<h3>Compared with the Google front-end version</h3>
+<div class="tablewrap"><table><tr><th></th><th>Google front end</th><th>Notion</th></tr><tr><td>Build effort</td><td>Front-end page to build</td><td>Just databases and a template</td></tr><tr><td>Input</td><td>Web form</td><td>Notion pages (incl. mobile app)</td></tr><tr><td>Look & feel</td><td>Fully custom</td><td>Notion's layout</td></tr><tr><td>Files</td><td>Google Drive</td><td>Google Drive (linked from Notion)</td></tr><tr><td>Analysis layer</td><td>As described above</td><td>Notion AI or another available AI service; check plan and location support</td></tr></table></div>
+</section>
+</main>
+</div>
+</div>
+<script>
+(function(){
+  var blocks=document.querySelectorAll('.lang-block'), btns=document.querySelectorAll('.langswitch button');
+  function setLang(l){
+    blocks.forEach(function(b){b.hidden=b.dataset.lang!==l});
+    btns.forEach(function(b){b.setAttribute('aria-pressed',b.dataset.l===l)});
+    document.documentElement.lang=l==='zh'?'zh-Hant':'en';
+    document.title=l==='zh'?'DD 分析流程':'DD Analysis Workflow';
+    try{localStorage.setItem('dd-lang',l)}catch(e){}
+    spy();
+  }
+  btns.forEach(function(b){b.addEventListener('click',function(){setLang(b.dataset.l)})});
+  function spy(){
+    var blk=[].find.call(blocks,function(b){return !b.hidden}); if(!blk)return;
+    var secs=blk.querySelectorAll('section'), links=blk.querySelectorAll('.toc a'), cur=secs[0].id;
+    secs.forEach(function(s){if(s.getBoundingClientRect().top<140)cur=s.id});
+    if(window.innerHeight+window.scrollY>=document.body.scrollHeight-4)cur=secs[secs.length-1].id;
+    links.forEach(function(a){
+      var on=a.dataset.t===cur; a.classList.toggle('active',on);
+      if(on&&window.innerWidth<=860){a.parentNode.scrollLeft=a.offsetLeft-40}
+    });
+  }
+  window.addEventListener('scroll',spy,{passive:true});
+  var saved='zh'; try{saved=localStorage.getItem('dd-lang')||'zh'}catch(e){}
+  setLang(saved==='en'?'en':'zh');
+})();
+</script>
+</body>
+</html>
